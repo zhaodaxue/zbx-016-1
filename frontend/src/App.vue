@@ -102,8 +102,8 @@ const overviewStats = computed(() => {
   const segFront = overview.value.segment_stats.find((r) => r.tank_code === 'FRONT');
   const segRear = overview.value.segment_stats.find((r) => r.tank_code === 'REAR');
   return [
-    { label: '前舱余量(吨)', value: front ? parseFloat(front.max_tons).toFixed(1) : '--' },
-    { label: '后舱余量(吨)', value: rear ? parseFloat(rear.max_tons).toFixed(1) : '--' },
+    { label: '前舱余量(吨)', value: front ? parseFloat(front.current_tons).toFixed(1) : '--' },
+    { label: '后舱余量(吨)', value: rear ? parseFloat(rear.current_tons).toFixed(1) : '--' },
     { label: '前舱耗用(吨)', value: segFront ? parseFloat(segFront.total_consumed || 0).toFixed(2) : '0.00' },
     { label: '活动告警', value: overview.value.alert_stats.active_count || 0 },
   ];
@@ -116,17 +116,23 @@ const filteredSegments = computed(() => {
 
 function selectTimeRange(hours) {
   selectedHours.value = hours;
-  loadCurve();
+  loadAllData();
+}
+
+function getTimeRange() {
+  const end = new Date();
+  const start = new Date(Date.now() - selectedHours.value * 60 * 60 * 1000);
+  return { start: start.toISOString(), end: end.toISOString() };
 }
 
 async function loadCurve() {
-  const end = new Date();
-  const start = new Date(Date.now() - selectedHours.value * 60 * 60 * 1000);
-  curveData.value = await getLevelCurve(start.toISOString(), end.toISOString());
+  const { start, end } = getTimeRange();
+  curveData.value = await getLevelCurve(start, end);
 }
 
 async function loadSegments() {
-  const data = await getSegments({});
+  const { start, end } = getTimeRange();
+  const data = await getSegments({ start_time: start, end_time: end });
   segments.value = data.data || [];
 }
 

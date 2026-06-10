@@ -34,15 +34,32 @@ async function checkImbalanceAlerts() {
     let created = 0;
     let resolved = 0;
 
-    await client.query(
-      `DELETE FROM alerts WHERE alert_type = 'IMBALANCE' AND is_active = true`
+    const existingActiveRes = await client.query(
+      `SELECT * FROM alerts WHERE alert_type = 'IMBALANCE' AND is_active = true
+       ORDER BY start_time ASC LIMIT 1`
     );
+    const existingActive = existingActiveRes.rows[0] || null;
 
     let activeAlert = null;
     let triggerCount = 0;
     let recoverCount = 0;
+    let startFromIndex = 0;
 
-    for (let i = 0; i < paired.length; i++) {
+    if (existingActive) {
+      activeAlert = {
+        id: existingActive.id,
+        start_time: existingActive.start_time,
+      };
+      for (let i = 0; i < paired.length; i++) {
+        if (paired[i].time >= existingActive.start_time) {
+          startFromIndex = i;
+          break;
+        }
+      }
+      triggerCount = TRIGGER_CONSECUTIVE;
+    }
+
+    for (let i = startFromIndex; i < paired.length; i++) {
       const pair = paired[i];
       const frontRate = pair.front ? calculateRate(pair.front) : 0;
       const rearRate = pair.rear ? calculateRate(pair.rear) : 0;
@@ -116,7 +133,7 @@ async function checkImbalanceAlerts() {
     }
 
     await client.query('COMMIT');
-    return { success: true, created, resolved, pairs_checked: paired.length };
+    return { success: true, created, resolved, pairs_checked: paired.length, reused_active: existingActive ? 1 : 0 };
   } catch (e) {
     await client.query('ROLLBACK');
     throw e;

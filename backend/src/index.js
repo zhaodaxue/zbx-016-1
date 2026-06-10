@@ -26,7 +26,12 @@ app.get('/api/health', (req, res) => {
 
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err);
-  res.status(500).json({ error: 'Internal Server Error', message: err.message });
+  const status = err.status || 500;
+  const code = err.code || (status === 400 ? 'BAD_REQUEST' : status === 404 ? 'NOT_FOUND' : status === 401 ? 'UNAUTHORIZED' : status === 403 ? 'FORBIDDEN' : 'INTERNAL_ERROR');
+  res.status(status).json({
+    error: code,
+    message: err.message || 'Internal Server Error',
+  });
 });
 
 async function start() {

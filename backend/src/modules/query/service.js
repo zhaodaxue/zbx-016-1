@@ -202,6 +202,16 @@ async function getOverview(hours = 24) {
     [cutoff]
   );
 
+  const latestReadings = await query(
+    `SELECT s.tank_code, s.remaining_tons as current_tons, s.recorded_at as last_recorded_at
+     FROM sensor_readings s
+     INNER JOIN (
+       SELECT tank_code, MAX(recorded_at) as max_time
+       FROM sensor_readings
+       GROUP BY tank_code
+     ) m ON s.tank_code = m.tank_code AND s.recorded_at = m.max_time`
+  );
+
   const segmentStats = await query(
     `SELECT tank_code,
             COUNT(*) as segment_count,
@@ -222,11 +232,38 @@ async function getOverview(hours = 24) {
     [cutoff]
   );
 
+  const latestMap = {};
+  for (const r of latestReadings.rows) {
+    latestMap[r.tank_code] = {
+      current_tons: parseFloat(r.current_tons),
+      last_recorded_at: r.last_recorded_at,
+    };
+  }
+
+  const mergedReadingStats = readingStats.rows.map((r) => ({
+    ...r,
+    min_tons: parseFloat(r.min_tons),
+    max_tons: parseFloat(r.max_tons),
+    current_tons: latestMap[r.tank_code]?.current_tons || 0,
+    last_recorded_at: latestMap[r.tank_code]?.last_recorded_at || null,
+  }));
+
+  const mergedSegmentStats = segmentStats.rows.map((r) => ({
+    ...r,
+    segment_count: parseInt(r.segment_count),
+    total_consumed: parseFloat(r.total_consumed || 0),
+    avg_consumed: parseFloat(r.avg_consumed || 0),
+    total_merges: parseInt(r.total_merges || 0),
+  }));
+
   return {
     hours,
-    reading_stats: readingStats.rows,
-    segment_stats: segmentStats.rows,
-    alert_stats: alertStats.rows[0] || { total: 0, active_count: 0 },
+    reading_stats: mergedReadingStats,
+    segment_stats: mergedSegmentStats,
+    alert_stats: {
+      total: parseInt(alertStats.rows[0]?.total || 0),
+      active_count: parseInt(alertStats.rows[0]?.active_count || 0),
+    },
   };
 }
 
