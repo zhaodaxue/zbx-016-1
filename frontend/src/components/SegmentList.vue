@@ -18,7 +18,12 @@
           </tr>
         </thead>
         <tbody>
-          <tr v-for="s in segments" :key="s.id" :class="['seg-row', { merged: s.merge_count > 0 }]">
+          <tr
+            v-for="s in segments"
+            :key="s.id"
+            :class="['seg-row', { merged: s.merge_count > 0, selected: s.id === selectedId }]"
+            @click="handleRowClick(s)"
+          >
             <td class="id-cell">#{{ s.id }}</td>
             <td>
               <span :class="['tank-tag', s.tank_code === 'FRONT' ? 'front' : 'rear']">
@@ -37,7 +42,9 @@
               <span v-else class="no-merge">—</span>
             </td>
             <td>
-              <button class="view-btn" @click="$emit('select', s.id)">查看</button>
+              <button class="view-btn" @click.stop="$emit('select', s.id)">
+                {{ selectedId === s.id ? '取消' : '查看' }}
+              </button>
             </td>
           </tr>
         </tbody>
@@ -47,16 +54,21 @@
 </template>
 
 <script setup>
-defineProps({
+const props = defineProps({
   segments: { type: Array, default: () => [] },
   loading: { type: Boolean, default: false },
+  selectedId: { type: [Number, String], default: null },
 });
-defineEmits(['select']);
+const emit = defineEmits(['select', 'toggleSelect']);
 
 function formatTime(t) {
   if (!t) return '';
   const d = new Date(t);
   return `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+function handleRowClick(segment) {
+  emit('toggleSelect', segment.id);
 }
 </script>
 
@@ -89,9 +101,16 @@ function formatTime(t) {
   border-bottom: 1px solid #edf2f7;
   color: #2d3748;
 }
+.seg-row { cursor: pointer; transition: background-color 0.15s; }
 .seg-row:hover { background: #f7fafc; }
 .seg-row.merged { background: #fffaf0; }
 .seg-row.merged:hover { background: #feebc8; }
+.seg-row.selected {
+  background: #e6fffa !important;
+  box-shadow: inset 3px 0 0 #38b2ac;
+}
+.seg-row.selected td { color: #234e52; }
+.seg-row.selected:hover { background: #b2f5ea !important; }
 .id-cell { color: #718096; font-family: monospace; font-size: 12px; }
 .num { text-align: right; font-family: 'Consolas', monospace; }
 .num.highlight { color: #2b6cb0; font-weight: 600; }
@@ -124,4 +143,6 @@ function formatTime(t) {
   cursor: pointer;
 }
 .view-btn:hover { background: #3182ce; }
+.seg-row.selected .view-btn { background: #ed8936; }
+.seg-row.selected .view-btn:hover { background: #dd6b20; }
 </style>

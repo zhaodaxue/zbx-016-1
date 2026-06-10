@@ -19,7 +19,11 @@
       </div>
     </header>
 
-    <AlertBanner :alerts="alertData" />
+    <AlertBanner
+      :alerts="alertData"
+      :active-selected-id="activeAlertId"
+      @select-alert="handleSelectAlert"
+    />
 
     <main class="main-content">
       <section class="chart-section card">
@@ -36,13 +40,32 @@
             </button>
           </div>
         </div>
-        <LevelChart :curve="curveData" :style="{ height: '380px' }" />
+        <LevelChart
+          ref="levelChartRef"
+          :curve="curveData"
+          :brush-range="brushRange"
+          :highlight-range="highlightRange"
+          :zoom-range="zoomRange"
+          @brush-end="handleBrushEnd"
+          @brush-clear="handleBrushClear"
+          :style="{ height: '380px' }"
+        />
       </section>
 
       <div class="content-row">
         <section class="segments-section card">
           <div class="section-header">
-            <h2>📋 取用段列表</h2>
+            <div class="section-title-wrap">
+              <h2>📋 取用段列表</h2>
+              <span v-if="activeAlertId" class="filter-badge">
+                告警过滤中
+                <button @click="activeAlertId = null; zoomRange = null">✕</button>
+              </span>
+              <span v-else-if="brushRange" class="filter-badge">
+                选区过滤中
+                <button @click="handleBrushClear">✕</button>
+              </span>
+            </div>
             <div class="filter-group">
               <select v-model="filterTank" class="filter-select">
                 <option value="">全部舱位</option>
@@ -54,17 +77,23 @@
           <SegmentList
             :segments="filteredSegments"
             :loading="loading"
+            :selected-id="selectedSegmentId"
             @select="handleSelectSegment"
+            @toggle-select="handleToggleSegment"
           />
         </section>
       </div>
     </main>
 
     <SegmentDetail
-      v-if="selectedSegmentId"
-      :segment-id="selectedSegmentId"
-      @close="selectedSegmentId = null"
+      v-if="detailSegmentId"
+      :segment-id="detailSegmentId"
+      @close="detailSegmentId = null"
     />
+
+    <div class="toast" :class="{ show: toastVisible }">
+      {{ toastMessage }}
+    </div>
 
     <footer class="app-footer">
       <span>淡水舱耗用追踪系统 v1.0.0 | 船端本地部署 | 每10分钟采集</span>
@@ -84,6 +113,17 @@ const loading = ref(false);
 const selectedHours = ref(24);
 const filterTank = ref('');
 const selectedSegmentId = ref(null);
+const detailSegmentId = ref(null);
+const activeAlertId = ref(null);
+
+const brushRange = ref(null);
+const highlightRange = ref(null);
+const zoomRange = ref(null);
+
+const levelChartRef = ref(null);
+const toastMessage = ref('');
+const toastVisible = ref(false);
+let toastTimer = null;
 
 const curveData = ref({ FRONT: { data: [] }, REAR: { data: [] } });
 const segments = ref([]);
@@ -109,20 +149,110 @@ const overviewStats = computed(() => {
   ];
 });
 
-const filteredSegments = computed(() => {
-  if (!filterTank.value) return segments.value;
-  return segments.value.filter((s) => s.tank_code === filterTank.value);
+function timeOverlap(segStart, segEnd, rangeStart, rangeEnd) {
+  const s1 = new Date(segStart).getTime();
+  const e1 = new Date(segEnd).getTime();
+  const s2 = new Date(rangeStart).getTime();
+  const e2 = new Date(rangeEnd).getTime();
+  return s1 < e2 && e1 > s2;
+}
+
+const effectiveFilterRange = computed(() => {
+  if (activeAlertId.value) {
+    const alert = alertData.value.find((a) => a.id === activeAlertId.value);
+    if (alert) {
+      const end = alert.end_time || getTimeRange().end;
+      return { start: alert.start_time, end };
+    }
+  }
+  if (brushRange.value) {
+    return brushRange.value;
+  }
+  return null;
 });
 
+const filteredSegments = computed(() => {
+  let list = segments.value;
+  if (filterTank.value) {
+    list = list.filter((s) => s.tank_code === filterTank.value);
+  }
+  if (effectiveFilterRange.value) {
+    list = list.filter((s) =>
+      timeOverlap(s.start_time, s.end_time, effectiveFilterRange.value.start, effectiveFilterRange.value.end)
+    );
+  }
+  return list;
+});
+
+function showToast(msg) {
+  toastMessage.value = msg;
+  toastVisible.value = true;
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    toastVisible.value = false;
+  }, 2500);
+}
+
 function selectTimeRange(hours) {
+  if (hours === selectedHours.value) return;
+  const oldRange = getTimeRangeWithHours(selectedHours.value);
+  const newRange = getTimeRangeWithHours(hours);
+  const newStart = new Date(newRange.start).getTime();
+  const newEnd = new Date(newRange.end).getTime();
+
+  if (brushRange.value) {
+    const bStart = new Date(brushRange.value.start).getTime();
+    const bEnd = new Date(brushRange.value.end).getTime();
+    const clippedStart = Math.max(bStart, newStart);
+    const clippedEnd = Math.min(bEnd, newEnd);
+    if (clippedStart < clippedEnd) {
+      brushRange.value = {
+        start: new Date(clippedStart).toISOString(),
+        end: new Date(clippedEnd).toISOString(),
+      };
+    } else {
+      brushRange.value = null;
+    }
+  }
+
+  if (selectedSegmentId.value) {
+    const seg = segments.value.find((s) => s.id === selectedSegmentId.value);
+    if (seg) {
+      const segStart = new Date(seg.start_time).getTime();
+      const segEnd = new Date(seg.end_time).getTime();
+      const segMid = (segStart + segEnd) / 2;
+      if (segMid < newStart || segMid > newEnd) {
+        selectedSegmentId.value = null;
+        highlightRange.value = null;
+        showToast('选中段不在新时间范围内，已取消选中');
+      }
+    }
+  }
+
+  if (activeAlertId.value) {
+    const alert = alertData.value.find((a) => a.id === activeAlertId.value);
+    if (alert) {
+      const alertStart = new Date(alert.start_time).getTime();
+      const alertEnd = alert.end_time ? new Date(alert.end_time).getTime() : newEnd;
+      if (alertEnd < newStart || alertStart > newEnd) {
+        activeAlertId.value = null;
+        showToast('选中告警不在新时间范围内，已取消选中');
+      }
+    }
+  }
+
   selectedHours.value = hours;
   loadAllData();
 }
 
-function getTimeRange() {
+function getTimeRangeWithHours(hours) {
   const end = new Date();
-  const start = new Date(Date.now() - selectedHours.value * 60 * 60 * 1000);
+  const start = new Date(Date.now() - hours * 60 * 60 * 1000);
   return { start: start.toISOString(), end: end.toISOString() };
+}
+
+function getTimeRange() {
+  return getTimeRangeWithHours(selectedHours.value);
 }
 
 async function loadCurve() {
@@ -157,7 +287,51 @@ async function loadAllData() {
 }
 
 function handleSelectSegment(id) {
-  selectedSegmentId.value = id;
+  detailSegmentId.value = id;
+}
+
+function handleToggleSegment(id) {
+  if (selectedSegmentId.value === id) {
+    selectedSegmentId.value = null;
+    highlightRange.value = null;
+    zoomRange.value = null;
+  } else {
+    selectedSegmentId.value = id;
+    const seg = segments.value.find((s) => s.id === id);
+    if (seg) {
+      const start = new Date(seg.start_time).getTime();
+      const end = new Date(seg.end_time).getTime();
+      const pad = 15 * 60 * 1000;
+      highlightRange.value = { start: seg.start_time, end: seg.end_time };
+      zoomRange.value = {
+        start: new Date(start - pad).toISOString(),
+        end: new Date(end + pad).toISOString(),
+      };
+      activeAlertId.value = null;
+    }
+  }
+}
+
+function handleBrushEnd(range) {
+  brushRange.value = range;
+  activeAlertId.value = null;
+}
+
+function handleBrushClear() {
+  brushRange.value = null;
+}
+
+function handleSelectAlert(alert) {
+  if (activeAlertId.value === alert.id) {
+    activeAlertId.value = null;
+    zoomRange.value = null;
+  } else {
+    activeAlertId.value = alert.id;
+    selectedSegmentId.value = null;
+    highlightRange.value = null;
+    const end = alert.end_time || getTimeRange().end;
+    zoomRange.value = { start: alert.start_time, end };
+  }
 }
 
 onMounted(loadAllData);
@@ -227,6 +401,11 @@ setInterval(() => loadAllData(), 60000);
   margin-bottom: 16px;
 }
 .section-header h2 { font-size: 17px; color: #2d3748; }
+.section-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
 .time-selector { display: flex; gap: 8px; }
 .time-btn {
   padding: 6px 14px;
@@ -258,4 +437,48 @@ setInterval(() => loadAllData(), 60000);
   padding: 12px;
   font-size: 12px;
 }
+
+.toast {
+  position: fixed;
+  top: 80px;
+  left: 50%;
+  transform: translateX(-50%) translateY(-20px);
+  background: rgba(45, 55, 72, 0.92);
+  color: white;
+  padding: 12px 24px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  z-index: 10000;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s, transform 0.3s;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+}
+.toast.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+.filter-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #ebf8ff;
+  color: #2c5282;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+}
+.filter-badge button {
+  background: none;
+  border: none;
+  color: #2c5282;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 2px;
+  line-height: 1;
+}
+.filter-badge button:hover { color: #1a365d; }
 </style>

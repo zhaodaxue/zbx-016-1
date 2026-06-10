@@ -1,7 +1,13 @@
 <template>
   <div class="alert-banner" v-if="activeAlerts.length > 0">
     <div class="alert-scroll">
-      <div class="alert-item" v-for="a in activeAlerts" :key="a.id">
+      <div
+        class="alert-item"
+        v-for="a in activeAlerts"
+        :key="a.id"
+        :class="{ active: a.id === activeSelectedId }"
+        @click="handleClick(a)"
+      >
         <span class="alert-icon">⚠️</span>
         <span class="alert-type">{{ a.alert_label || '告警' }}</span>
         <span class="alert-desc">
@@ -25,7 +31,10 @@ import { computed } from 'vue';
 
 const props = defineProps({
   alerts: { type: Array, default: () => [] },
+  activeSelectedId: { type: [Number, String], default: null },
 });
+
+const emit = defineEmits(['selectAlert']);
 
 const activeAlerts = computed(() => props.alerts.filter((a) => a.is_active));
 const resolvedAlerts = computed(() => props.alerts.filter((a) => !a.is_active));
@@ -34,6 +43,10 @@ function formatTime(t) {
   if (!t) return '';
   const d = new Date(t);
   return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+function handleClick(alert) {
+  emit('selectAlert', alert);
 }
 </script>
 
@@ -61,6 +74,17 @@ function formatTime(t) {
   color: #742a2a;
   font-size: 14px;
   font-weight: 500;
+  padding: 6px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.alert-item:hover {
+  background: rgba(197, 48, 48, 0.15);
+}
+.alert-item.active {
+  background: rgba(197, 48, 48, 0.28);
+  box-shadow: 0 0 0 2px rgba(197, 48, 48, 0.4);
 }
 .alert-icon { font-size: 16px; }
 .alert-type {

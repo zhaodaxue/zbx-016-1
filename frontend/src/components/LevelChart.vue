@@ -8,11 +8,15 @@ import * as echarts from 'echarts';
 
 const props = defineProps({
   curve: { type: Object, default: () => ({ FRONT: { data: [] }, REAR: { data: [] } }) },
+  brushRange: { type: Object, default: null },
+  highlightRange: { type: Object, default: null },
+  zoomRange: { type: Object, default: null },
 });
+
+const emit = defineEmits(['brushEnd', 'brushClear']);
 
 const chartRef = ref(null);
 let chart = null;
-let resizeObserver = null;
 
 function transformData(list) {
   return list.map((p) => [new Date(p.time).getTime(), p.value]);
@@ -36,12 +40,71 @@ function getValveMarkPoints(list, label) {
   return points;
 }
 
+function getDataExtent() {
+  const frontData = transformData(props.curve.FRONT?.data || []);
+  const rearData = transformData(props.curve.REAR?.data || []);
+  const all = [...frontData, ...rearData];
+  if (all.length === 0) {
+    const end = Date.now();
+    const start = end - 24 * 60 * 60 * 1000;
+    return [start, end];
+  }
+  let min = Infinity, max = -Infinity;
+  for (const p of all) {
+    if (p[0] < min) min = p[0];
+    if (p[0] > max) max = p[0];
+  }
+  return [min, max];
+}
+
+function timeToPercent(ts, extent) {
+  const [min, max] = extent;
+  if (max === min) return 0;
+  return ((ts - min) / (max - min)) * 100;
+}
+
 function render() {
   if (!chart) return;
   const frontData = transformData(props.curve.FRONT?.data || []);
   const rearData = transformData(props.curve.REAR?.data || []);
   const frontValve = getValveMarkPoints(props.curve.FRONT?.data || [], '前舱');
   const rearValve = getValveMarkPoints(props.curve.REAR?.data || [], '后舱');
+  const extent = getDataExtent();
+
+  const markAreas = [];
+  if (props.highlightRange) {
+    const hStart = new Date(props.highlightRange.start).getTime();
+    const hEnd = new Date(props.highlightRange.end).getTime();
+    markAreas.push([
+      {
+        xAxis: hStart,
+        itemStyle: { color: 'rgba(72, 187, 120, 0.25)' },
+      },
+      { xAxis: hEnd },
+    ]);
+  }
+
+  const dataZoomConfig = [
+    {
+      type: 'inside',
+      start: 0,
+      end: 100,
+      zoomOnMouseWheel: true,
+      moveOnMouseMove: true,
+    },
+    {
+      type: 'slider',
+      start: 0,
+      end: 100,
+      height: 20,
+      bottom: 10,
+      borderColor: 'transparent',
+      backgroundColor: '#edf2f7',
+      fillerColor: 'rgba(44, 82, 130, 0.2)',
+      handleStyle: { color: '#2c5282' },
+      textStyle: { color: '#718096' },
+    },
+  ];
 
   const option = {
     backgroundColor: 'transparent',
@@ -51,14 +114,17 @@ function render() {
       borderColor: 'transparent',
       textStyle: { color: '#fff' },
       formatter: function (params) {
+        if (!params || params.length === 0) return '';
         const t = new Date(params[0].axisValue);
         let html = `<div style="font-weight:600;margin-bottom:6px">${t.toLocaleString('zh-CN')}</div>`;
         for (const p of params) {
-          html += `<div style="display:flex;align-items:center;gap:6px;margin:3px 0">
-            <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${p.color}"></span>
-            <span>${p.seriesName}:</span>
-            <span style="font-weight:600">${p.value[1].toFixed(3)} 吨</span>
-          </div>`;
+          if (p.value && p.value.length >= 2) {
+            html += `<div style="display:flex;align-items:center;gap:6px;margin:3px 0">
+              <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${p.color}"></span>
+              <span>${p.seriesName}:</span>
+              <span style="font-weight:600">${p.value[1].toFixed(3)} 吨</span>
+            </div>`;
+          }
         }
         return html;
       },
@@ -70,6 +136,31 @@ function render() {
       textStyle: { color: '#4a5568' },
     },
     grid: { left: 50, right: 30, top: 50, bottom: 50 },
+    toolbox: {
+      feature: {
+        brush: {
+          type: ['lineX', 'clear'],
+          title: {
+            lineX: '框选时间窗',
+            clear: '清除选区',
+          },
+        },
+      },
+      right: 16,
+      top: 4,
+    },
+    brush: {
+      toolbox: ['lineX', 'clear'],
+      xAxisIndex: 0,
+      brushStyle: {
+        borderWidth: 1,
+        color: 'rgba(44, 82, 130, 0.18)',
+        borderColor: '#2c5282',
+      },
+      throttleType: 'debounce',
+      throttleDelay: 300,
+      brushMode: 'single',
+    },
     xAxis: {
       type: 'time',
       axisLine: { lineStyle: { color: '#cbd5e0' } },
@@ -92,21 +183,7 @@ function render() {
       splitLine: { lineStyle: { color: '#e2e8f0', type: 'dashed' } },
       scale: true,
     },
-    dataZoom: [
-      { type: 'inside', start: 0, end: 100 },
-      {
-        type: 'slider',
-        start: 0,
-        end: 100,
-        height: 20,
-        bottom: 10,
-        borderColor: 'transparent',
-        backgroundColor: '#edf2f7',
-        fillerColor: 'rgba(44, 82, 130, 0.2)',
-        handleStyle: { color: '#2c5282' },
-        textStyle: { color: '#718096' },
-      },
-    ],
+    dataZoom: dataZoomConfig,
     series: [
       {
         name: '前舱液位',
@@ -123,6 +200,7 @@ function render() {
             { offset: 1, color: 'rgba(66,153,225,0.02)' },
           ]),
         },
+        markArea: markAreas.length > 0 ? { silent: true, data: markAreas } : undefined,
         markPoint: {
           data: frontValve,
           tooltip: { formatter: '开阀状态' },
@@ -152,12 +230,55 @@ function render() {
   };
 
   chart.setOption(option, true);
+
+  if (props.zoomRange) {
+    const zStart = new Date(props.zoomRange.start).getTime();
+    const zEnd = new Date(props.zoomRange.end).getTime();
+    const pStart = Math.max(0, Math.min(100, timeToPercent(zStart, extent)));
+    const pEnd = Math.max(0, Math.min(100, timeToPercent(zEnd, extent)));
+    chart.dispatchAction({
+      type: 'dataZoom',
+      start: pStart,
+      end: pEnd,
+    });
+  }
+
+  if (props.brushRange) {
+    const bStart = new Date(props.brushRange.start).getTime();
+    const bEnd = new Date(props.brushRange.end).getTime();
+    chart.dispatchAction({
+      type: 'brush',
+      command: 'takeSnapshot',
+      areas: [
+        {
+          brushType: 'lineX',
+          xAxisIndex: 0,
+          coordRange: [bStart, bEnd],
+        },
+      ],
+    });
+  }
+}
+
+function onBrushEnd(params) {
+  if (!params || !params.areas || params.areas.length === 0) {
+    emit('brushClear');
+    return;
+  }
+  const area = params.areas[0];
+  if (area.coordRange) {
+    emit('brushEnd', {
+      start: new Date(area.coordRange[0]).toISOString(),
+      end: new Date(area.coordRange[1]).toISOString(),
+    });
+  }
 }
 
 onMounted(async () => {
   await nextTick();
   if (chartRef.value) {
     chart = echarts.init(chartRef.value);
+    chart.on('brushEnd', onBrushEnd);
     render();
   }
 });
@@ -168,11 +289,26 @@ watch(
   { deep: true }
 );
 
+watch(
+  [() => props.brushRange, () => props.highlightRange, () => props.zoomRange],
+  () => render(),
+  { deep: true }
+);
+
 onBeforeUnmount(() => {
   if (chart) {
     chart.dispose();
     chart = null;
   }
+});
+
+defineExpose({
+  clearBrush: () => {
+    if (chart) chart.dispatchAction({ type: 'brush', areas: [], command: 'clear' });
+  },
+  clearZoom: () => {
+    if (chart) chart.dispatchAction({ type: 'dataZoom', start: 0, end: 100 });
+  },
 });
 </script>
 
